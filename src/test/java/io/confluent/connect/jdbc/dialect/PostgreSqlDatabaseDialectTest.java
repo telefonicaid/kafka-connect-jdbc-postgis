@@ -39,6 +39,7 @@ import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.JDBCType;
 import java.sql.PreparedStatement;
@@ -52,6 +53,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+
+import javax.xml.bind.DatatypeConverter;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.mock;

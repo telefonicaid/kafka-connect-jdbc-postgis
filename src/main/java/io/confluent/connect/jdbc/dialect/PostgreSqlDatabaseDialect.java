@@ -526,7 +526,7 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
   }
 
   private boolean maybeBindPostgresDataType(
-          PreparedStatement statement, int index, Schema schema, Object value) throws SQLExeption {
+          PreparedStatement statement, int index, Schema schema, Object value) throws SQLException {
     if (schema.name() != null) {
       switch (schema.name()) {
         case ZonedTime.SCHEMA_NAME:
