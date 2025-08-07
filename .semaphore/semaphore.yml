@@ -58,7 +58,7 @@ blocks:
         - name: Release
           commands:
             - mvn -Dcloud -Pjenkins -U -Dmaven.wagon.http.retryHandler.count=10 -Ddependency.check.skip=true --batch-mode -DaltDeploymentRepository=confluent-codeartifact-internal::default::https://confluent-519856050701.d.codeartifact.us-west-2.amazonaws.com/maven/maven-snapshots/
-            -DrepositoryId=confluent-codeartifact-internal 
+              -DrepositoryId=confluent-codeartifact-internal deploy -DskipTest
   - name: Release Notes
     dependencies: []
     run:
@@ -86,4 +86,5 @@ after_pipeline:
         commands:
           - checkout
           - sem-version java 11
-          - emit-sonarqube-data --run_only_sonar_scan
+          - emit-sonarqube-data -a test-results
+
