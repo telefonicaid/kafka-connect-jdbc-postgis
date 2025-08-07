@@ -26,7 +26,7 @@
     <groupId>io.confluent</groupId>
     <artifactId>kafka-connect-jdbc</artifactId>
     <packaging>jar</packaging>
-    <version>10.9.0-SNAPSHOT</version>
+    <version>10.8.5-SNAPSHOT</version>
     <name>kafka-connect-jdbc</name>
     <organization>
         <name>Confluent, Inc.</name>
@@ -49,12 +49,12 @@
         <connection>scm:git:git://github.com/confluentinc/kafka-connect-jdbc.git</connection>
         <developerConnection>scm:git:git@github.com:confluentinc/kafka-connect-jdbc.git</developerConnection>
         <url>https://github.com/confluentinc/kafka-connect-jdbc</url>
-        <tag>10.7.x</tag>
+        <tag>10.8.x</tag>
     </scm>
 
     <properties>
         <derby.version>10.14.2.0</derby.version>
-        <commons-io.version>2.14.0</commons-io.version>
+        <commons-io.version>2.4.0</commons-io.version>
         <kafka.connect.maven.plugin.version>0.11.1</kafka.connect.maven.plugin.version>
         <sqlite-jdbc.version>3.41.2.2</sqlite-jdbc.version>
         <oracle.jdbc.driver.version>19.7.0.0</oracle.jdbc.driver.version>
@@ -68,7 +68,7 @@
         <project.package.home>target/${project.artifactId}-${project.version}-package</project.package.home>
         <maven.release.plugin.version>2.5.3</maven.release.plugin.version>
         <testcontainers.version>1.17.3</testcontainers.version>
-	<jacoco.plugin.version>0.8.11</jacoco.plugin.version>
+        <jacoco.plugin.version>0.8.11</jacoco.plugin.version>
         <instruction.coverage.threshold>0.78</instruction.coverage.threshold>
         <branch.coverage.threshold>0.67</branch.coverage.threshold>
         <method.coverage.threshold>0.76</method.coverage.threshold>
@@ -120,7 +120,7 @@
             <scope>runtime</scope>
         </dependency>
         <!-- Add all packages imported by ojdbc8-production explicitly to pom when bumping up driver version -->
-	<!-- Do not use ojdbc8-production directly to avoid .pom file in final package -->
+        <!-- Do not use ojdbc8-production directly to avoid .pom file in final package -->
         <!-- See https://www.oracle.com/database/technologies/maven-central-guide.html -->
         <dependency>
             <groupId>com.oracle.database.jdbc</groupId>
@@ -347,7 +347,7 @@
 
     <build>
         <plugins>
-	    <plugin>
+            <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.plugin.version}</version>
@@ -735,7 +735,7 @@
                 </plugins>
             </build>
         </profile>
-	<profile>
+        <profile>
         <id>licenses-source</id>
             <build>
                 <plugins>
