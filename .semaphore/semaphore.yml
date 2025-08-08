@@ -58,7 +58,7 @@ blocks:
         - name: Release
           commands:
             - mvn -Dcloud -Pjenkins -U -Dmaven.wagon.http.retryHandler.count=10 -Ddependency.check.skip=true --batch-mode -DaltDeploymentRepository=confluent-codeartifact-internal::default::https://confluent-519856050701.d.codeartifact.us-west-2.amazonaws.com/maven/maven-snapshots/
-              -DrepositoryId=confluent-codeartifact-internal deploy -DskipTest
+              -DrepositoryId=confluent-codeartifact-internal deploy -DskipTests
   - name: Release Notes
     dependencies: []
     run:
