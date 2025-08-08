@@ -25,6 +25,13 @@ import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
 import io.confluent.connect.jdbc.util.IdentifierRules;
 import io.confluent.connect.jdbc.util.TableDefinition;
 import io.confluent.connect.jdbc.util.TableId;
+
+import io.confluent.connect.jdbc.data.geometry.Geography;
+import io.confluent.connect.jdbc.data.geometry.Geometry;
+import io.confluent.connect.jdbc.data.geometry.Point;
+import io.confluent.connect.jdbc.time.ZonedTime;
+import io.confluent.connect.jdbc.time.ZonedTimestamp;
+
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.connect.data.Date;
@@ -32,6 +39,7 @@ import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Schema.Type;
 import org.apache.kafka.connect.data.SchemaBuilder;
+import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.apache.kafka.connect.errors.DataException;
@@ -77,6 +85,7 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
   static final String JSON_TYPE_NAME = "json";
   static final String JSONB_TYPE_NAME = "jsonb";
   static final String UUID_TYPE_NAME = "uuid";
+  static final String PRECISION_PARAMETER_KEY = "connect.decimal.precision";
 
   /**
    * Define the PG datatypes that require casting upon insert/update statements.
@@ -299,6 +308,16 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
           return "TIME";
         case Timestamp.LOGICAL_NAME:
           return "TIMESTAMP";
+        case ZonedTime.SCHEMA_NAME:
+          return "TIMETZ";
+        case ZonedTimestamp.SCHEMA_NAME:
+          return "TIMESTAMPTZ";
+        case Geometry.LOGICAL_NAME:
+          return "GEOMETRY";
+        case Geography.LOGICAL_NAME:
+          return "GEOGRAPHY";
+        case Point.LOGICAL_NAME:
+          return "GEOMETRY (POINT)";          
         default:
           // fall through to normal types
       }
@@ -440,6 +459,28 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
     }
   }
 
+  private boolean maybeBindPostgresDataType(
+          PreparedStatement statement, int index, Schema schema, Object value) throws SQLException {
+    if (schema.name() != null) {
+      switch (schema.name()) {
+        case ZonedTime.SCHEMA_NAME:
+        case ZonedTimestamp.SCHEMA_NAME:
+          statement.setObject(index, value, Types.OTHER);
+          return true;
+        case Geometry.LOGICAL_NAME:
+        case Geography.LOGICAL_NAME:
+        case Point.LOGICAL_NAME:
+          byte[] wkb = ((Struct) value).getBytes(Geometry.WKB_FIELD);
+          statement.setBytes(index, wkb);
+          return true;
+        default:
+          return false;
+      }
+    }
+    return false;
+  }
+
+    
   @Override
   protected boolean maybeBindPrimitive(
       PreparedStatement statement,
@@ -509,6 +550,9 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       }
       default:
         break;
+    }
+    if (maybeBindPostgresDataType(statement, index, schema, value)) {
+        return true;
     }
     return super.maybeBindPrimitive(statement, index, schema, value);
   }
