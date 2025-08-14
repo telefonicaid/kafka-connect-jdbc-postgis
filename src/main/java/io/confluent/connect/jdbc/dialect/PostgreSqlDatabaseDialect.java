@@ -441,6 +441,13 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
               .transformedBy(transform)
               .of(nonKeyColumns);
     }
+    // TODO check flag config before: 
+    builder.append(" WHERE EXCLUDED.")
+       .appendColumnName(updateIfNewerField)
+       .append(" > ")
+       .append(table)
+       .append(".")
+       .appendColumnName(updateIfNewerField);
     return builder.toString();
   }
 
