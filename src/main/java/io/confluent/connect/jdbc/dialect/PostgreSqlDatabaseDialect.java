@@ -63,6 +63,8 @@ import java.util.UUID;
  */
 public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
 
+    private final String updateIfNewerField;
+
   private static final Logger log = LoggerFactory.getLogger(PostgreSqlDatabaseDialect.class);
 
   // Visible for testing
@@ -105,6 +107,7 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
    */
   public PostgreSqlDatabaseDialect(AbstractConfig config) {
     super(config, new IdentifierRules(".", "\"", "\""));
+    this.updateIfNewerField = config.getString(io.confluent.connect.jdbc.sink.JdbcSinkConfig.UPDATE_IF_NEWER_FIELD_CONFIG);
   }
 
   @Override
@@ -440,6 +443,18 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
               .delimitedBy(",")
               .transformedBy(transform)
               .of(nonKeyColumns);
+      // Add WHERE condition only if updateIfNewerField is defined and not empty
+      // This is used to avoid updating the row if the value in the updateIfNewerField is not newer
+      // than the existing value in the table.
+      // This is useful for lastdata flow.
+      if (updateIfNewerField != null && !updateIfNewerField.isEmpty()) {
+        builder.append(" WHERE EXCLUDED.")
+               .appendColumnName(updateIfNewerField)
+               .append(" > ")
+               .append(table)
+               .append(".")
+               .appendColumnName(updateIfNewerField);
+      }
     }
     return builder.toString();
   }
