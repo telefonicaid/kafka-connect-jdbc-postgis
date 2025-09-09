@@ -20,6 +20,7 @@ import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -96,26 +97,67 @@ public class JdbcSourceTaskUpdateTest extends JdbcSourceTaskTestBase {
     assertRecordsTopic(records, TOPIC_PREFIX + SINGLE_TABLE_NAME);
   }
 
-  @Test(expected = ConnectException.class)
+  @Test
   public void testIncrementingInvalidColumn() throws Exception {
     expectInitializeNoOffsets(Arrays.asList(
         SINGLE_TABLE_PARTITION_WITH_VERSION,
         SINGLE_TABLE_PARTITION)
     );
 
+    PowerMock.replayAll();
+
+    db.createTable(SINGLE_TABLE_NAME, "id", "INT NOT NULL", "name", "VARCHAR(64)");
+
+    ConfigException e = assertThrows(
+        ConfigException.class,
+        () -> startTask(null, "INCORRECT INPUT", null));
+    assertEquals(e.getMessage(), "Incrementing column: INCORRECT INPUT does not exist.");
+
+    PowerMock.verifyAll();
+  }
+
+  @Test
+  public void testTimestampInvalidColumn() throws Exception {
+    expectInitializeNoOffsets(Arrays.asList(
+        SINGLE_TABLE_PARTITION_WITH_VERSION,
+        SINGLE_TABLE_PARTITION)
+    );
+    PowerMock.replayAll();
+
+    db.createTable(SINGLE_TABLE_NAME, "id", "INT NOT NULL", "name", "VARCHAR(64)", "modified", "TIMESTAMP NOT NULL", "created", "TIMESTAMP NOT NULL");
+
+    ConfigException e = assertThrows(
+        ConfigException.class,
+        () -> startTask("MODIFIED, incorrect, WRONG", "id", null)
+    );
+    assertEquals(e.getMessage(),"Timestamp columns: incorrect, WRONG do not exist.");
+
+    PowerMock.verifyAll();
+  }
+
+  @Test
+  public void testIncrementingNullableColumn() throws Exception {
+    expectInitializeNoOffsets(Arrays.asList(
+        SINGLE_TABLE_PARTITION_WITH_VERSION,
+        SINGLE_TABLE_PARTITION)
+    );
 
     PowerMock.replayAll();
 
     // Incrementing column must be NOT NULL
     db.createTable(SINGLE_TABLE_NAME, "id", "INT");
 
-    startTask(null, "id", null);
+    ConnectException e = assertThrows(
+        ConnectException.class,
+        () -> startTask(null, "id", null)
+    );
+    assertEquals(e.getMessage(), "Cannot make incremental queries using incrementing column id on test because this column is nullable.");
 
     PowerMock.verifyAll();
   }
 
-  @Test(expected = ConnectException.class)
-  public void testTimestampInvalidColumn() throws Exception {
+  @Test
+  public void testTimestampNullableColumn() throws Exception {
     expectInitializeNoOffsets(Arrays.asList(
         SINGLE_TABLE_PARTITION_WITH_VERSION,
         SINGLE_TABLE_PARTITION)
@@ -124,9 +166,13 @@ public class JdbcSourceTaskUpdateTest extends JdbcSourceTaskTestBase {
     PowerMock.replayAll();
 
     // Timestamp column must be NOT NULL
-    db.createTable(SINGLE_TABLE_NAME, "modified", "TIMESTAMP");
+    db.createTable(SINGLE_TABLE_NAME, "modified", "TIMESTAMP", "created", "TIMESTAMP", "updated", "TIMESTAMP");
 
-    startTask("modified", null, null);
+    ConnectException e = assertThrows(
+        ConnectException.class,
+        () -> startTask("modified, created, updated", null, null)
+    );
+    assertEquals(e.getMessage(), "Cannot make incremental queries using timestamp columns modified,created,updated on test because all of these columns are nullable.");
 
     PowerMock.verifyAll();
   }
@@ -513,12 +559,12 @@ public class JdbcSourceTaskUpdateTest extends JdbcSourceTaskTestBase {
     try {
       startTask("modified", "id", null, 0L, invalidTimeZoneID);
       fail("A ConfigException should have been thrown");
-    } catch (ConnectException e) {
-      assertTrue(e.getCause() instanceof ConfigException);
-      ConfigException configException = (ConfigException) e.getCause();
-      assertThat(configException.getMessage(),
+    } catch (ConfigException e) {
+      assertThat(e.getMessage(),
           equalTo(
-              "Invalid value Europe/Invalid for configuration db.timezone: Invalid time zone identifier"));
+              "Invalid value org.apache.kafka.common.config.ConfigException: Invalid value Europe/Invalid "
+                      + "for configuration db.timezone: Invalid time zone identifier for configuration "
+                      + "Couldn't start JdbcSourceTask due to configuration error"));
     }
   }
 
@@ -866,22 +912,35 @@ public class JdbcSourceTaskUpdateTest extends JdbcSourceTaskTestBase {
     PowerMock.verifyAll();
   }
 
-  @Test (expected = ConnectException.class)
+  @Test (expected = ConfigException.class)
   public void testTaskFailsIfNoQueryOrTablesConfigProvided() {
     initializeTask();
     Map<String, String> props = new HashMap<>();
-    props.put(JdbcSourceTaskConfig.TABLES_CONFIG, "[]");
+    props.put(JdbcSourceTaskConfig.TABLES_CONFIG, "");
+    props.put(JdbcSourceTaskConfig.TABLES_FETCHED, "true");
     props.put(JdbcSourceConnectorConfig.QUERY_CONFIG, "");
     task.start(props);
   }
 
-  @Test (expected = ConnectException.class)
+  @Test (expected = ConfigException.class)
   public void testTaskFailsIfBothQueryAndTablesConfigProvided() {
     initializeTask();
     Map<String, String> props = new HashMap<>();
     props.put(JdbcSourceTaskConfig.TABLES_CONFIG, "[dbo.table]");
+    props.put(JdbcSourceTaskConfig.TABLES_FETCHED, "true");
     props.put(JdbcSourceConnectorConfig.QUERY_CONFIG, "Select * from some table");
     task.start(props);
+  }
+
+  @Test
+  public void testTaskCreatedWhileWaitingToFetchTables() throws InterruptedException {
+    initializeTask();
+    Map<String, String> props = new HashMap<>();
+    props.put(JdbcSourceTaskConfig.TABLES_CONFIG, "");
+    props.put(JdbcSourceTaskConfig.TABLES_FETCHED, "false");
+    task.start(props);
+    List<SourceRecord> records = task.poll();
+    assertNull(records);
   }
 
   @Test
@@ -984,6 +1043,7 @@ public class JdbcSourceTaskUpdateTest extends JdbcSourceTaskTestBase {
     if (query != null) {
       taskConfig.put(JdbcSourceTaskConfig.QUERY_CONFIG, query);
       taskConfig.put(JdbcSourceTaskConfig.TABLES_CONFIG, "");
+      taskConfig.put(JdbcSourceTaskConfig.TABLES_FETCHED, "true");
     }
     if (timestampColumn != null) {
       taskConfig.put(JdbcSourceConnectorConfig.TIMESTAMP_COLUMN_NAME_CONFIG, timestampColumn);

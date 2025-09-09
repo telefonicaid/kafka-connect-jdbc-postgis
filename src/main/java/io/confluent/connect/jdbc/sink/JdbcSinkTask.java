@@ -62,6 +62,7 @@ public class JdbcSinkTask extends SinkTask {
   }
 
   void initWriter() {
+    log.info("Initializing JDBC writer");
     if (config.dialectName != null && !config.dialectName.trim().isEmpty()) {
       dialect = DatabaseDialects.create(config.dialectName, config);
     } else {
@@ -70,6 +71,7 @@ public class JdbcSinkTask extends SinkTask {
     final DbStructure dbStructure = new DbStructure(dialect);
     log.info("Initializing writer using SQL dialect: {}", dialect.getClass().getSimpleName());
     writer = new JdbcDbWriter(config, dialect, dbStructure);
+    log.info("JDBC writer initialized");
   }
 
   @Override
@@ -86,10 +88,12 @@ public class JdbcSinkTask extends SinkTask {
     );
     try {
       writer.write(records);
+      log.info("Successfully wrote {} records.", recordsCount);
     } catch (TableAlterOrCreateException tace) {
       if (reporter != null) {
         unrollAndRetry(records);
       } else {
+        log.error(tace.toString());
         throw tace;
       }
     } catch (SQLException sqle) {
@@ -111,6 +115,7 @@ public class JdbcSinkTask extends SinkTask {
         initWriter();
         remainingRetries--;
         context.timeout(config.retryBackoffMs);
+        log.debug(sqlAllMessagesException.toString());
         throw new RetriableException(sqlAllMessagesException);
       } else {
         if (reporter != null) {
@@ -135,14 +140,17 @@ public class JdbcSinkTask extends SinkTask {
   private void unrollAndRetry(Collection<SinkRecord> records) {
     writer.closeQuietly();
     initWriter();
+    log.warn("Retrying write operation for {} records.", records.size());
     for (SinkRecord record : records) {
       try {
         writer.write(Collections.singletonList(record));
       } catch (TableAlterOrCreateException tace) {
+        log.debug(tace.toString());
         reporter.report(record, tace);
         writer.closeQuietly();
       } catch (SQLException sqle) {
         SQLException sqlAllMessagesException = getAllMessagesException(sqle);
+        log.debug(sqlAllMessagesException.toString());
         reporter.report(record, sqlAllMessagesException);
         writer.closeQuietly();
       }

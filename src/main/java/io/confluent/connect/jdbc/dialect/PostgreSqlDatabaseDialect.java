@@ -23,6 +23,7 @@ import io.confluent.connect.jdbc.util.ColumnId;
 import io.confluent.connect.jdbc.util.ExpressionBuilder;
 import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
 import io.confluent.connect.jdbc.util.IdentifierRules;
+import io.confluent.connect.jdbc.util.QuoteMethod;
 import io.confluent.connect.jdbc.util.TableDefinition;
 import io.confluent.connect.jdbc.util.TableId;
 
@@ -33,15 +34,14 @@ import io.confluent.connect.jdbc.time.ZonedTime;
 import io.confluent.connect.jdbc.time.ZonedTimestamp;
 
 import org.apache.kafka.common.config.AbstractConfig;
-import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.Schema.Type;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
+import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.DataException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +54,7 @@ import java.sql.Types;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -93,11 +94,11 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
    * Define the PG datatypes that require casting upon insert/update statements.
    */
   private static final Set<String> CAST_TYPES = Collections.unmodifiableSet(
-      Utils.mkSet(
+      new HashSet<>(Arrays.asList(
           JSON_TYPE_NAME,
           JSONB_TYPE_NAME,
           UUID_TYPE_NAME
-      )
+      ))
   );
 
   /**
@@ -169,6 +170,13 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
           result.catalogName(),
           result.schemaName(),
           newTableName
+      );
+    }
+    if (quoteSqlIdentifiers == QuoteMethod.NEVER) {
+      result = new TableId(
+          result.catalogName(),
+          result.schemaName(),
+          result.tableName().toLowerCase()
       );
     }
     return result;
@@ -467,12 +475,58 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       Schema.Type type,
       Object value
   ) {
-    if (schemaName == null && Type.BOOLEAN.equals(type)) {
-      builder.append((Boolean) value ? "TRUE" : "FALSE");
+    if (schemaName == null) {
+      switch (type) {
+        case BOOLEAN:
+          builder.append((Boolean) value ? "TRUE" : "FALSE");
+          return;
+        case ARRAY:
+          formatArrayValue(builder, value);
+          return;
+        default:
+          // Fall through to base implementation
+          break;
+      }
+    }
+    super.formatColumnValue(builder, schemaName, schemaParameters, type, value);
+  }
+
+  private void formatArrayValue(ExpressionBuilder builder, Object value) {
+    if (value == null) {
+      builder.append("NULL");
+      return;
+    }
+
+    builder.append("ARRAY[");
+
+    Collection<?> valueCollection;
+    if (value instanceof Collection) {
+      valueCollection = (Collection<?>) value;
     } else {
-      super.formatColumnValue(builder, schemaName, schemaParameters, type, value);
+      throw new ConnectException("Unsupported type for array value: " + value.getClass().getName());
+    }
+    builder.appendList()
+            .delimitedBy(",")
+            .transformedBy(PostgreSqlDatabaseDialect::formatArrayItem)
+            .of(valueCollection);
+    builder.append("]");
+  }
+
+  private static void formatArrayItem(ExpressionBuilder builder, Object item) {
+    if (item == null) {
+      builder.append("NULL");
+    } else if (item instanceof String) {
+      String escapedString = ((String) item).replace("'", "''");
+      builder.appendStringQuoted(escapedString);
+    } else if (item instanceof Number) {
+      builder.append(item.toString());
+    } else if (item instanceof Boolean) {
+      builder.append((Boolean) item ? "TRUE" : "FALSE");
+    } else {
+      throw new ConnectException("Unsupported type for array item: " + item.getClass().getName());
     }
   }
+
 
   private boolean maybeBindPostgresDataType(
           PreparedStatement statement, int index, Schema schema, Object value) throws SQLException {
