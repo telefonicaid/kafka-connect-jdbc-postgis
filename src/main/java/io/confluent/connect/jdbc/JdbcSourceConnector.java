@@ -159,6 +159,7 @@ public class JdbcSourceConnector extends SourceConnector {
 
   @Override
   public List<Map<String, String>> taskConfigs(int maxTasks) {
+    log.info("Starting with the task Configuration method.");
     String query = config.getString(JdbcSourceConnectorConfig.QUERY_CONFIG);
     List<Map<String, String>> taskConfigs;
     if (!query.isEmpty()) {
@@ -172,6 +173,8 @@ public class JdbcSourceConnector extends SourceConnector {
     } else {
       log.info("No custom query provided, generating task configurations for tables");
       List<TableId> currentTables = tableMonitorThread.tables();
+      log.trace("Current tables from tableMonitorThread: {}", currentTables);
+      
       if (currentTables == null || currentTables.isEmpty()) {
         taskConfigs = new ArrayList<>(1);
         Map<String, String> taskProps = new HashMap<>(configProperties);
@@ -188,11 +191,13 @@ public class JdbcSourceConnector extends SourceConnector {
           log.warn("The connector has not been able to read the "
               + "list of tables from the database yet.");
         } else {
+          log.trace("currentTables is empty - no tables found after fetch");
           taskProps.put(JdbcSourceTaskConfig.TABLES_FETCHED, "true");
           log.warn("No tables were found so there's no work to be done.");
         }
         taskConfigs.add(taskProps);
       } else {
+        log.trace("Found {} tables to process", currentTables.size());
         int numGroups = Math.min(currentTables.size(), maxTasks);
         List<List<TableId>> tablesGrouped =
             ConnectorUtils.groupPartitions(currentTables, numGroups);
@@ -203,8 +208,10 @@ public class JdbcSourceConnector extends SourceConnector {
           builder.appendList().delimitedBy(",").of(taskTables);
           taskProps.put(JdbcSourceTaskConfig.TABLES_CONFIG, builder.toString());
           taskProps.put(JdbcSourceTaskConfig.TABLES_FETCHED, "true");
+          log.trace("Assigned tables {} to task with tablesFetched=true", taskTables);
           taskConfigs.add(taskProps);
         }
+        log.info("Current Tables size: {}", currentTables.size());
         log.trace(
             "Producing task configs with no custom query for tables: {}",
             currentTables.toArray()

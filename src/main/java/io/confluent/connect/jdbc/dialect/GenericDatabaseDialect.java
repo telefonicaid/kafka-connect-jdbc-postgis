@@ -18,6 +18,7 @@ package io.confluent.connect.jdbc.dialect;
 import java.time.ZoneOffset;
 import java.util.TimeZone;
 
+import org.apache.kafka.common.Configurable;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.config.types.Password;
@@ -89,8 +90,11 @@ import io.confluent.connect.jdbc.util.DateTimeUtils;
 import io.confluent.connect.jdbc.util.ExpressionBuilder;
 import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
 import io.confluent.connect.jdbc.util.IdentifierRules;
+import io.confluent.connect.jdbc.util.JdbcCredentials;
+import io.confluent.connect.jdbc.util.JdbcCredentialsProvider;
 import io.confluent.connect.jdbc.util.JdbcDriverInfo;
 import io.confluent.connect.jdbc.util.QuoteMethod;
+import io.confluent.connect.jdbc.util.StringUtils;
 import io.confluent.connect.jdbc.util.TableDefinition;
 import io.confluent.connect.jdbc.util.TableId;
 import io.confluent.connect.jdbc.util.TableType;
@@ -113,6 +117,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   private static final int MAX_INTEGER_TYPE_PRECISION = 18;
 
   private static final String PRECISION_FIELD = "connect.decimal.precision";
+
+  private final JdbcCredentialsProvider jdbcCredentialsProvider;
 
   /**
    * The provider for {@link GenericDatabaseDialect}.
@@ -156,6 +162,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   private volatile JdbcDriverInfo jdbcDriverInfo;
   private final int batchMaxRows;
   private final TimeZone timeZone;
+  private final JdbcSinkConfig.TimestampPrecisionMode timestampPrecisionMode;
+  private final Set<String> timestampFieldsList;
   private final TimeZone dateTimeZone;
   private final JdbcSourceConnectorConfig.TimestampGranularity tsGranularity;
 
@@ -183,6 +191,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     this.defaultIdentifierRules = defaultIdentifierRules;
     this.jdbcUrl = config.getString(JdbcSourceConnectorConfig.CONNECTION_URL_CONFIG);
     this.jdbcUrlInfo = DatabaseDialects.extractJdbcUrlInfo(jdbcUrl);
+    this.jdbcCredentialsProvider = getJdbcCredentialsProvider(config);
+
     if (config instanceof JdbcSinkConfig) {
       JdbcSinkConfig sinkConfig = (JdbcSinkConfig) config;
       catalogPattern = JdbcSourceTaskConfig.CATALOG_PATTERN_DEFAULT;
@@ -191,6 +201,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       quoteSqlIdentifiers = QuoteMethod.get(
           config.getString(JdbcSinkConfig.QUOTE_SQL_IDENTIFIERS_CONFIG)
       );
+      timestampPrecisionMode = sinkConfig.timestampPrecisionMode;
+      timestampFieldsList = sinkConfig.timestampFieldsList;
+
     } else {
       catalogPattern = config.getString(JdbcSourceTaskConfig.CATALOG_PATTERN_CONFIG);
       schemaPattern = config.getString(JdbcSourceTaskConfig.SCHEMA_PATTERN_CONFIG);
@@ -198,6 +211,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       quoteSqlIdentifiers = QuoteMethod.get(
           config.getString(JdbcSourceConnectorConfig.QUOTE_SQL_IDENTIFIERS_CONFIG)
       );
+      timestampPrecisionMode = null;
+      timestampFieldsList = null;
     }
     if (config instanceof JdbcSourceConnectorConfig) {
       mapNumerics = ((JdbcSourceConnectorConfig)config).numericMapping();
@@ -238,15 +253,14 @@ public class GenericDatabaseDialect implements DatabaseDialect {
 
   @Override
   public Connection getConnection() throws SQLException {
-    // These config names are the same for both source and sink configs ...
-    String username = config.getString(JdbcSourceConnectorConfig.CONNECTION_USER_CONFIG);
-    Password dbPassword = config.getPassword(JdbcSourceConnectorConfig.CONNECTION_PASSWORD_CONFIG);
+    JdbcCredentials jdbcCredentials = jdbcCredentialsProvider.getJdbcCredentials();
+
     Properties properties = new Properties();
-    if (username != null) {
-      properties.setProperty("user", username);
+    if (jdbcCredentials.getUsername() != null) {
+      properties.setProperty("user", jdbcCredentials.getUsername());
     }
-    if (dbPassword != null) {
-      properties.setProperty("password", dbPassword.value());
+    if (jdbcCredentials.getPassword() != null) {
+      properties.setProperty("password", jdbcCredentials.getPassword());
     }
     properties = addConnectionProperties(properties);
     // Timeout is 40 seconds to be as long as possible for customer to have a long connection
@@ -1650,6 +1664,29 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       Schema schema,
       Object value
   ) throws SQLException {
+    bindFieldInternal(statement, index, schema, value, null, null);
+  }
+
+  @Override
+  public void bindField(
+      PreparedStatement statement,
+      int index,
+      Schema schema,
+      Object value,
+      ColumnDefinition colDef,
+      String fieldName)
+      throws SQLException {
+    bindFieldInternal(statement, index, schema, value, colDef, fieldName);
+  }
+
+  private void bindFieldInternal(
+      PreparedStatement statement,
+      int index,
+      Schema schema,
+      Object value,
+      ColumnDefinition colDef,
+      String fieldName)
+      throws SQLException {
     if (value == null) {
       Integer type = getSqlTypeForSchema(schema);
       if (type != null) {
@@ -1660,7 +1697,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     } else {
       boolean bound = maybeBindLogical(statement, index, schema, value);
       if (!bound) {
-        bound = maybeBindPrimitive(statement, index, schema, value);
+        bound = maybeBindPrimitive(statement, index, schema, value, fieldName);
       }
       if (!bound) {
         throw new ConnectException("Unsupported source data type: " + schema.type());
@@ -1684,7 +1721,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       PreparedStatement statement,
       int index,
       Schema schema,
-      Object value
+      Object value,
+      String fieldName
   ) throws SQLException {
     switch (schema.type()) {
       case INT8:
@@ -1697,7 +1735,20 @@ public class GenericDatabaseDialect implements DatabaseDialect {
         statement.setInt(index, (Integer) value);
         break;
       case INT64:
-        statement.setLong(index, (Long) value);
+        if (config instanceof JdbcSinkConfig
+            && timestampFieldsList.contains(fieldName)) {
+          if (timestampPrecisionMode
+              == JdbcSinkConfig.TimestampPrecisionMode.MICROSECONDS) {
+            Timestamp ts = DateTimeUtils.formatSinkMicrosTimestamp((Long) value);
+            statement.setTimestamp(index, ts, DateTimeUtils.getTimeZoneCalendar(timeZone));
+          } else if (timestampPrecisionMode
+              == JdbcSinkConfig.TimestampPrecisionMode.NANOSECONDS) {
+            Timestamp ts = DateTimeUtils.formatSinkNanosTimestamp((Long) value);
+            statement.setTimestamp(index, ts, DateTimeUtils.getTimeZoneCalendar(timeZone));
+          }
+        } else {
+          statement.setLong(index, (Long) value);
+        }
         break;
       case FLOAT32:
         statement.setFloat(index, (Float) value);
@@ -1709,7 +1760,20 @@ public class GenericDatabaseDialect implements DatabaseDialect {
         statement.setBoolean(index, (Boolean) value);
         break;
       case STRING:
-        statement.setString(index, (String) value);
+        if (config instanceof JdbcSinkConfig
+            && timestampFieldsList.contains(fieldName)) {
+          if (timestampPrecisionMode
+              == JdbcSinkConfig.TimestampPrecisionMode.MICROSECONDS) {
+            Timestamp ts = DateTimeUtils.formatSinkMicrosTimestamp((String) value);
+            statement.setTimestamp(index, ts, DateTimeUtils.getTimeZoneCalendar(timeZone));
+          } else if (timestampPrecisionMode
+              == JdbcSinkConfig.TimestampPrecisionMode.NANOSECONDS) {
+            Timestamp ts = DateTimeUtils.formatSinkNanosTimestamp((String) value);
+            statement.setTimestamp(index, ts, DateTimeUtils.getTimeZoneCalendar(timeZone));
+          }
+        } else {
+          statement.setString(index, (String) value);
+        }
         break;
       case BYTES:
         final byte[] bytes;
@@ -1974,6 +2038,51 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     return url.replaceAll("(?i)([?&]([^=&]*)password([^=&]*)=)[^&]*", "$1****");
   }
 
+  /**
+   * This is a common method to get an instance of configured JdbcCredentialsProvider class
+   * @param config Source or sink connector config
+   * @return an instance of configured JdbcCredentialsProvider class
+   */
+  @SuppressWarnings("unchecked")
+  protected JdbcCredentialsProvider getJdbcCredentialsProvider(AbstractConfig config) {
+    // All the config key variables referred in this method are same in both source and sink
+    // connector. Using source connector config keys here but method should work for sink
+    // connector as well.
+    String username = config.getString(JdbcSourceConnectorConfig.CONNECTION_USER_CONFIG);
+    Password dbPassword = config.getPassword(JdbcSourceConnectorConfig.CONNECTION_PASSWORD_CONFIG);
+
+    try {
+      JdbcCredentialsProvider provider = ((Class<? extends JdbcCredentialsProvider>)
+          config.getClass(JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CLASS_CONFIG)
+      ).newInstance();
+
+      if (provider instanceof Configurable) {
+        Map<String, Object> configs = config.originalsWithPrefix(
+            JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CONFIG_PREFIX
+        );
+        configs.remove(
+            JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CLASS_CONFIG.substring(
+                JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CONFIG_PREFIX.length()
+            )
+        );
+
+        if (StringUtils.isNotBlank(username)) {
+          configs.put(JdbcSourceConnectorConfig.CONNECTION_USER_CONFIG, username);
+        }
+        if (dbPassword != null && StringUtils.isNotBlank(dbPassword.value())) {
+          configs.put(JdbcSourceConnectorConfig.CONNECTION_PASSWORD_CONFIG, dbPassword.value());
+        }
+
+        ((Configurable) provider).configure(configs);
+      }
+
+      return provider;
+    } catch (ClassCastException | IllegalAccessException | InstantiationException e) {
+      throw new ConnectException(
+          "Invalid class for: " + JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CLASS_CONFIG, e);
+    }
+  }
+
   @Override
   public String identifier() {
     return name() + " database " + sanitizedUrl(jdbcUrl);
@@ -1982,5 +2091,19 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   @Override
   public String toString() {
     return name();
+  }
+
+  @Override
+  public String resolveSynonym(Connection connection, String synonymName) throws SQLException {
+    DatabaseMetaData metadata = connection.getMetaData();
+    String tableName = parseTableIdentifier(synonymName).tableName();
+    ResultSet tableRs = metadata.getTables(null, null, tableName, new String[]{"SYNONYM"});
+    if (tableRs.next()) {
+      ResultSet synonymRs = metadata.getColumns(null, null, tableName, null);
+      if (synonymRs.next()) {
+        return synonymRs.getString("TABLE_NAME");
+      }
+    }
+    return null;
   }
 }

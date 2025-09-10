@@ -32,7 +32,10 @@ import io.confluent.connect.jdbc.dialect.DatabaseDialect;
 import io.confluent.connect.jdbc.dialect.DatabaseDialects;
 import io.confluent.connect.jdbc.util.DatabaseDialectRecommender;
 import io.confluent.connect.jdbc.util.DateTimeUtils;
+import io.confluent.connect.jdbc.util.DefaultJdbcCredentialsProvider;
 import io.confluent.connect.jdbc.util.EnumRecommender;
+import io.confluent.connect.jdbc.util.JdbcCredentialsProvider;
+import io.confluent.connect.jdbc.util.JdbcCredentialsProviderValidator;
 import io.confluent.connect.jdbc.util.QuoteMethod;
 import io.confluent.connect.jdbc.util.TimeZoneValidator;
 
@@ -40,6 +43,7 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 
+import org.apache.kafka.common.Configurable;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.Config;
 import org.apache.kafka.common.config.ConfigDef;
@@ -206,6 +210,9 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
       "Define the granularity of the Timestamp column. Options include: \n"
           + "  * connect_logical (default): represents timestamp values using Kafka Connect's "
           + "built-in representations \n"
+          + "  * micros_long: represents timestamp values as micros since epoch\n"
+          + "  * micros_string: represents timestamp values as micros since epoch in string\n"
+          + "  * micros_iso_datetime_string: uses iso format 'yyyy-MM-dd'T'HH:mm:ss.SSSSSS'\n"
           + "  * nanos_long: represents timestamp values as nanos since epoch\n"
           + "  * nanos_string: represents timestamp values as nanos since epoch in string\n"
           + "  * nanos_iso_datetime_string: uses iso format 'yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'\n";
@@ -314,7 +321,7 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
 
   public static final String QUERY_SUFFIX_CONFIG = "query.suffix";
   public static final String QUERY_SUFFIX_DEFAULT = "";
-  public static final String QUERY_SUFFIX_DOC = 
+  public static final String QUERY_SUFFIX_DOC =
       "Suffix to append at the end of the generated query.";
   public static final String QUERY_SUFFIX_DISPLAY = "Query suffix";
 
@@ -323,6 +330,23 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
   public static final String QUERY_RETRIES_DOC =
           "Number of times to retry SQL exceptions encountered when executing queries.";
   public static final String QUERY_RETRIES_DISPLAY = "Query Retry Attempts";
+
+  /**
+   * The properties that begin with this prefix will be used to configure a class, specified by
+   * {@code jdbc.credentials.provider.class} if it implements {@link Configurable}.
+   */
+  public static final String CREDENTIALS_PROVIDER_CONFIG_PREFIX = "jdbc.credentials.provider.";
+
+  public static final String CREDENTIALS_PROVIDER_CLASS_CONFIG = CREDENTIALS_PROVIDER_CONFIG_PREFIX
+      + "class";
+  public static final Class<? extends JdbcCredentialsProvider> CREDENTIALS_PROVIDER_CLASS_DEFAULT =
+      DefaultJdbcCredentialsProvider.class;
+
+  public static final String CREDENTIALS_PROVIDER_CLASS_DISPLAY = "JDBC Credentials Provider Class";
+
+  public static final String CREDENTIALS_PROVIDER_CLASS_DOC = "Credentials provider or provider "
+      + "chain to use for authentication to database. By default the connector uses ``"
+      + DefaultJdbcCredentialsProvider.class.getName() + "``.";
 
   private static final EnumRecommender QUOTE_METHOD_RECOMMENDER =
       EnumRecommender.in(QuoteMethod.values());
@@ -455,6 +479,17 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
         ++orderInGroup,
         Width.SHORT,
         CONNECTION_PASSWORD_DISPLAY
+    ).define(
+        CREDENTIALS_PROVIDER_CLASS_CONFIG,
+        Type.CLASS,
+        CREDENTIALS_PROVIDER_CLASS_DEFAULT,
+        new JdbcCredentialsProviderValidator(),
+        Importance.LOW,
+        CREDENTIALS_PROVIDER_CLASS_DOC,
+        DATABASE_GROUP,
+        ++orderInGroup,
+        Width.LONG,
+        CREDENTIALS_PROVIDER_CLASS_DISPLAY
     ).define(
         CONNECTION_ATTEMPTS_CONFIG,
         Type.INT,
@@ -931,6 +966,29 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
         : org.apache.kafka.connect.data.Timestamp.builder().build(),
         (timestamp, tz) -> timestamp,
         (timestamp, tz) -> (Timestamp) timestamp),
+
+    MICROS_LONG(optional -> optional ? Schema.OPTIONAL_INT64_SCHEMA : Schema.INT64_SCHEMA,
+        (timestamp, tz) -> DateTimeUtils.toEpochMicros(timestamp),
+        (epochMicros, tz) -> DateTimeUtils.toMicrosTimestamp((Long) epochMicros)),
+
+    MICROS_STRING(optional -> optional ? Schema.OPTIONAL_STRING_SCHEMA : Schema.STRING_SCHEMA,
+        (timestamp, tz) -> DateTimeUtils.toEpochMicrosString(timestamp),
+        (epochMicrosString, tz) -> {
+          try {
+            return DateTimeUtils.toMicrosTimestamp((String) epochMicrosString);
+          } catch (NumberFormatException e) {
+            throw new ConnectException(
+                "Invalid value for timestamp column with micros-string granularity: "
+                    + epochMicrosString
+                    + e.getMessage());
+          }
+        }),
+
+    MICROS_ISO_DATETIME_STRING(optional -> optional
+        ? Schema.OPTIONAL_STRING_SCHEMA : Schema.STRING_SCHEMA,
+        DateTimeUtils::toIsoDateMicrosTimeString,
+        (toIsoDateMicrosTimeString, tz) ->
+            DateTimeUtils.toTimestampFromIsoDateMicrosTime((String) toIsoDateMicrosTimeString, tz)),
 
     NANOS_LONG(optional -> optional ? Schema.OPTIONAL_INT64_SCHEMA : Schema.INT64_SCHEMA,
         (timestamp, tz) -> DateTimeUtils.toEpochNanos(timestamp),
