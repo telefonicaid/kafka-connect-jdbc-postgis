@@ -735,7 +735,7 @@
                 </plugins>
             </build>
         </profile>
-	<profile>
+        <profile>
         <id>licenses-source</id>
             <build>
                 <plugins>
