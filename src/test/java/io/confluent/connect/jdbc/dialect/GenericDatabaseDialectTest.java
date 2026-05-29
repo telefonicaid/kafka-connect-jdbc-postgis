@@ -31,6 +31,7 @@ import org.testcontainers.shaded.com.google.common.collect.ImmutableList;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
@@ -677,10 +678,9 @@ public class GenericDatabaseDialectTest extends BaseDialectTest<GenericDatabaseD
     connProps.put(JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CLASS_CONFIG,
         TestConfigurableJdbcCredentialsProvider.class.getName());
 
-    // Adding custom config with prefix - jdbc.credentials.provider. to verify Configurable
-    // functionality
-    connProps.put(JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CONFIG_PREFIX + "username", username);
-    connProps.put(JdbcSourceConnectorConfig.CREDENTIALS_PROVIDER_CONFIG_PREFIX + "password", password);
+    // Adding custom config to verify Configurable functionality
+    connProps.put(JdbcSourceConnectorConfig.CONNECTION_PREFIX + "username", username);
+    connProps.put(JdbcSourceConnectorConfig.CONNECTION_PREFIX + "password", password);
     config = new JdbcSourceConnectorConfig(connProps);
     dialect = createDialect(config);
 
@@ -737,5 +737,38 @@ public class GenericDatabaseDialectTest extends BaseDialectTest<GenericDatabaseD
     JdbcCredentials basicJdbcCredentials = provider.getJdbcCredentials();
     assertEquals(username, basicJdbcCredentials.getUsername());
     assertEquals(password, basicJdbcCredentials.getPassword());
+  }
+
+  // ========== validateQuery Tests ==========
+
+  @Test
+  public void validateQuery_shouldUsePrepareStatement() throws SQLException {
+    Connection mockConnection = EasyMock.createMock(Connection.class);
+    PreparedStatement mockStmt = EasyMock.createMock(PreparedStatement.class);
+    expect(mockConnection.prepareStatement("SELECT * FROM users")).andReturn(mockStmt);
+    mockStmt.close();
+    EasyMock.expectLastCall();
+    replay(mockConnection, mockStmt);
+
+    dialect.validateQuery(mockConnection, "SELECT * FROM users");
+
+    verify(mockConnection, mockStmt);
+  }
+
+  @Test
+  public void validateQuery_shouldPropagateExceptionForInvalidQuery() throws SQLException {
+    Connection mockConnection = EasyMock.createMock(Connection.class);
+    expect(mockConnection.prepareStatement("SELECT * FROM nonexistent"))
+        .andThrow(new SQLException("table not found", "42S02"));
+    replay(mockConnection);
+
+    try {
+      dialect.validateQuery(mockConnection, "SELECT * FROM nonexistent");
+      org.junit.Assert.fail("Expected SQLException to be thrown");
+    } catch (SQLException e) {
+      assertEquals("42S02", e.getSQLState());
+    }
+
+    verify(mockConnection);
   }
 }
