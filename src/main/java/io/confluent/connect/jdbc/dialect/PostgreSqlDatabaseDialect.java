@@ -471,16 +471,36 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       // This is used to avoid updating the row if the value in the updateIfNewerField is not newer
       // than the existing value in the table.
       // This is useful for lastdata flow.
-      if (updateIfNewerField != null && !updateIfNewerField.isEmpty()) {
+      if (shouldApplyUpdateIfNewerCondition(keyColumns, nonKeyColumns)) {
         builder.append(" WHERE EXCLUDED.")
                .appendColumnName(updateIfNewerField)
-               .append(" > ")
+               .append(" >= ")
                .append(table)
                .append(".")
                .appendColumnName(updateIfNewerField);
       }
     }
     return builder.toString();
+  }
+
+  private boolean shouldApplyUpdateIfNewerCondition(
+      Collection<ColumnId> keyColumns,
+      Collection<ColumnId> nonKeyColumns
+  ) {
+    if (updateIfNewerField == null || updateIfNewerField.isEmpty()) {
+      return false;
+    }
+    return containsColumnIgnoreCase(keyColumns, updateIfNewerField)
+        || containsColumnIgnoreCase(nonKeyColumns, updateIfNewerField);
+  }
+
+  private boolean containsColumnIgnoreCase(Collection<ColumnId> columns, String columnName) {
+    for (ColumnId column : columns) {
+      if (column.name().equalsIgnoreCase(columnName)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @Override
