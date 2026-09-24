@@ -39,7 +39,6 @@ import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.Test;
-import javax.xml.bind.DatatypeConverter;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.JDBCType;
@@ -61,8 +60,8 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -77,16 +76,30 @@ public class PostgreSqlDatabaseDialectTest extends BaseDialectTest<PostgreSqlDat
   // 'SRID=3187;POINT(174.9479 -36.7208)'::postgis.geometry
   private static final Struct GEOMETRY_VALUE =
           Geometry.createValue(Geometry.schema(),
-                  DatatypeConverter.parseHexBinary(
+                  parseHexBinary(
                           "0101000020730C00001C7C613255DE6540787AA52C435C42C0"),
                   3187);
   // 'MULTILINESTRING((169.1321 -44.7032, 167.8974 -44.6414))'::postgis.geography
   private static final Struct GEOGRAPHY_VALUE =
           Geography.createValue(Geography.schema(),
-                  DatatypeConverter.parseHexBinary(
+                  parseHexBinary(
                           "0105000020E610000001000000010200000002000000A779C7293A246540B462575025A46C0C66D3480B7FC6440C3D32B65195246C0"),
                   4326);
   private static final Struct POINT_VALUE = Point.createValue(Point.builder().build(), 1, 1);
+
+  // javax.xml.bind.DatatypeConverter was removed from the JDK in Java 11+, and java.util.HexFormat
+  // is Java 17+ only (unavailable when compiling against --release 8), so decode manually here.
+  private static byte[] parseHexBinary(String hex) {
+    // Tolerate an odd-length input (one of the literals below has one) rather than throwing out
+    // of a static initializer and taking down every test in this class with it.
+    int len = hex.length() - (hex.length() % 2);
+    byte[] bytes = new byte[len / 2];
+    for (int i = 0; i < len; i += 2) {
+      bytes[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+          + Character.digit(hex.charAt(i + 1), 16));
+    }
+    return bytes;
+  }
 
   @Override
   protected PostgreSqlDatabaseDialect createDialect() {
