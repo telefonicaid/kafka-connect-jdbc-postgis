@@ -113,7 +113,11 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
    */
   public PostgreSqlDatabaseDialect(AbstractConfig config) {
     super(config, new IdentifierRules(".", "\"", "\""));
-    this.updateIfNewerField = config.getString(io.confluent.connect.jdbc.sink.JdbcSinkConfig.UPDATE_IF_NEWER_FIELD_CONFIG);
+    // update.if.newer.field only exists in JdbcSinkConfig; this dialect is also constructed
+    // with a JdbcSourceConnectorConfig for source connectors, which doesn't define it.
+    this.updateIfNewerField = config instanceof JdbcSinkConfig
+        ? config.getString(JdbcSinkConfig.UPDATE_IF_NEWER_FIELD_CONFIG)
+        : null;
   }
 
   @Override
