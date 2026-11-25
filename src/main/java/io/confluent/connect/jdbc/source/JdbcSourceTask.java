@@ -275,7 +275,10 @@ public class JdbcSourceTask extends SourceTask {
         for (Map<String, String> toCheckPartition : tablePartitionsToCheck) {
           offset = offsets.get(toCheckPartition);
           if (offset != null) {
-            log.info("Found offset {} for partition {}", offsets, toCheckPartition);
+            // Log only the single matched offset for this partition, never the whole `offsets`
+            // map: in incrementing/timestamp modes an offset holds customer column values, so
+            // dumping the full map would emit every table's latest column values on each poll.
+            log.info("Found offset {} for partition {}", offset, toCheckPartition);
             break;
           }
         }
@@ -550,7 +553,11 @@ public class JdbcSourceTask extends SourceTask {
   @Override
   public List<SourceRecord> poll() throws InterruptedException {
     if (engine == null) {
-      // Engine is not initialized yet, so nothing to poll
+      // Waiting for tables: back off so the worker's poll loop doesn't busy-spin at 100% CPU.
+      // poll.linger.ms is the knob for how long a poll waits before returning an empty batch,
+      // and it is the same backoff the running engine applies on an empty queue, so the idle
+      // wait is consistent whether or not the engine has been built yet.
+      time.sleep(config.pollLingerMs().toMillis());
       return null;
     }
     // Get the next batch from the queue

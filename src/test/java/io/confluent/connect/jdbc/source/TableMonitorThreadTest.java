@@ -348,6 +348,49 @@ public class TableMonitorThreadTest {
     verify(dialect).tableIds(connection);
   }
 
+  // Table names with a space or parenthesis are legitimate in many databases. The whitelist and
+  // blacklist keys built from them are only compared against configuration, never executed as
+  // SQL, so they must not be subject to identifier validation.
+  private final static TableId SPACED = new TableId(null, "s", "my table");
+  private final static TableId PAREN = new TableId(null, "s", "t(1)");
+  private final static TableId OTHER = new TableId(null, "s", "other");
+  private static final List<TableId> LIST_UNUSUAL_NAMES = Arrays.asList(SPACED, PAREN, OTHER);
+
+  @Test
+  public void testWhitelistMatchesTableNamesWithSpacesAndParentheses() throws Exception {
+    // One entry in unquoted qualified form, one in quoted qualified form.
+    Set<String> whitelist = new HashSet<>(Arrays.asList("s.my table", "\"s\".\"t(1)\""));
+    expectFreshExpressionBuilders();
+    tableMonitorThread = new TableMonitorThread(dialect, connectionProvider, context,
+        STARTUP_LIMIT, POLL_INTERVAL, whitelist, null, MockTime.SYSTEM);
+    expectTableNames(LIST_UNUSUAL_NAMES, shutdownThread());
+    tableMonitorThread.start();
+    tableMonitorThread.join();
+    checkTableIds(SPACED, PAREN);
+    verify(connectionProvider).getConnection();
+    verify(dialect).tableIds(connection);
+  }
+
+  @Test
+  public void testBlacklistMatchesTableNamesWithSpacesAndParentheses() throws Exception {
+    Set<String> blacklist = new HashSet<>(Arrays.asList("s.my table", "\"s\".\"t(1)\""));
+    expectFreshExpressionBuilders();
+    tableMonitorThread = new TableMonitorThread(dialect, connectionProvider, context,
+        STARTUP_LIMIT, POLL_INTERVAL, null, blacklist, MockTime.SYSTEM);
+    expectTableNames(LIST_UNUSUAL_NAMES, shutdownThread());
+    tableMonitorThread.start();
+    tableMonitorThread.join();
+    checkTableIds(OTHER);
+    verify(connectionProvider).getConnection();
+    verify(dialect).tableIds(connection);
+  }
+
+  private void expectFreshExpressionBuilders() {
+    // Like the real dialect, hand out a new builder per call so each matching key is built
+    // independently (a single shared builder would accumulate text across keys).
+    when(dialect.expressionBuilder()).thenAnswer(invocation -> ExpressionBuilder.create());
+  }
+
   private interface Op {
     void execute();
   }
